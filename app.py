@@ -1,137 +1,124 @@
 import streamlit as st
 import geopandas as gpd
-import plotly.express as px
+import matplotlib.pyplot as plt
 import random
 import time
-import os
 from fpdf import FPDF
 from unidecode import unidecode
 from PIL import Image
 
-# --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(page_title="Togo Map Quiz - Sylvestre BOCCO (JCDC TOGO)", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Togo Map Quiz - JCDC TOGO", layout="wide")
 
 def normaliser(texte):
     return unidecode(str(texte)).strip().lower()
 
 @st.cache_data
-def charger_donnees(chemin, type_jeu):
-    data = gpd.read_file(chemin)
-    col_nom = 'ADM2_FR' if type_jeu == "Préfectures" else 'Communes'
-    data = data.dropna(subset=[col_nom])
-    # Conversion en WGS84 pour l'interactivité Plotly (Zoom)
-    data = data.to_crs(epsg=4326)
-    return data, col_nom
+def charger_donnees(path, niveau):
+    data = gpd.read_file(path)
+    col = 'ADM2_FR' if niveau == "Préfectures" else 'Communes'
+    data = data.dropna(subset=[col])
+    return data, col
 
-# --- INITIALISATION ---
+# --- INITIALISATION DU SCORE ET DES QUESTIONS ---
 if 'score' not in st.session_state:
     st.session_state.score = 0
-if 'nb_questions' not in st.session_state:
-    st.session_state.nb_questions = 0
-if 'termine' not in st.session_state:
-    st.session_state.termine = False
+if 'nb_q' not in st.session_state:
+    st.session_state.nb_q = 0
 if 'cible' not in st.session_state:
     st.session_state.cible = None
+if 'termine' not in st.session_state:
+    st.session_state.termine = False
 
-# --- BARRE LATÉRALE (BRANDING JCDC) ---
+# --- BARRE LATÉRALE PROFESSIONNELLE ---
 with st.sidebar:
     try:
-        logo = Image.open("assets/logo_jcdc.png")
-        st.image(logo, width=180)
+        st.image("assets/logo_jcdc.png", width=150)
     except:
-        st.info("Logo JCDC")
+        st.write("📌 **JCDC TOGO**")
     
-    st.title("JCDC TOGO")
-    st.subheader("Direction : Sylvestre BOCCO")
+    st.title("Direction Générale")
+    st.write("Responsable : **Sylvestre BOCCO**")
     
     try:
-        drapeau = Image.open("assets/drapeau_togo.png")
-        st.image(drapeau, width=80)
+        st.image("assets/drapeau_togo.png", width=80)
     except:
-        st.info("🇹🇬 Togo")
+        st.write("🇹🇬 Togo")
     
     st.markdown("---")
-    niveau = st.selectbox("Choisir le niveau", ["Préfectures", "Communes"])
-    path = "data/Prefectures_Togo.shp" if niveau == "Préfectures" else "data/Communes_Togo.shp"
+    niveau = st.selectbox("Choisir l'échelle", ["Préfectures", "Communes"])
+    # Ajustement automatique des noms de fichiers
+    path = f"data/{niveau}_Togo.shp"
     
-    if st.button("🔄 Réinitialiser le Quiz"):
-        st.session_state.score = 0
-        st.session_state.nb_questions = 0
-        st.session_state.termine = False
+    if st.button("🔄 Recommencer"):
+        for key in st.session_state.keys():
+            del st.session_state[key]
         st.rerun()
 
 df, col_nom = charger_donnees(path, niveau)
 
-# --- CORPS DE L'APPLICATION ---
-st.title("🌍 Togo Map Quiz Interactif")
-tab1, tab2 = st.tabs(["📖 Révision & Exploration", "🎮 Le Défi"])
+# --- ZONE DE JEU ---
+st.title("🌍 Quiz Cartographique du Togo")
 
-with tab1:
-    st.write("Survolez et zoomez sur la carte pour apprendre les noms.")
-    fig_rev = px.choropleth_mapbox(
-        df, geojson=df.geometry, locations=df.index,
-        color=col_nom, mapbox_style="carto-positron",
-        zoom=6, center={"lat": 8.6, "lon": 1.2},
-        opacity=0.6, hover_name=col_nom
-    )
-    fig_rev.update_layout(margin={"r":0,"t":0,"l":0,"b":0})
-    st.plotly_chart(fig_rev, use_container_width=True)
+if not st.session_state.termine:
+    if st.session_state.nb_q < 5:
+        # Affichage clair de la progression
+        st.info(f"Question **{st.session_state.nb_q + 1}** sur 5  |  Votre Score actuel : **{st.session_state.score}**")
+        
+        if st.session_state.cible is None:
+            st.session_state.cible = random.choice(df[col_nom].unique().tolist())
+        
+        # Carte Matplotlib : Rapide et stable
+        fig, ax = plt.subplots(figsize=(7, 9))
+        df.plot(ax=ax, color='whitesmoke', edgecolor='black', linewidth=0.6)
+        df[df[col_nom] == st.session_state.cible].plot(ax=ax, color='red')
+        plt.axis('off')
+        st.pyplot(fig)
 
-with tab2:
-    if not st.session_state.termine:
-        if st.session_state.nb_questions < 5:
-            if st.button("🎯 Nouvelle Question"):
-                st.session_state.cible = random.choice(df[col_nom].unique().tolist())
-                st.session_state.debut_temps = time.time()
+        # Formulaire de réponse
+        with st.form(key=f"form_{st.session_state.nb_q}"):
+            reponse = st.text_input("Quelle est la zone en rouge ?")
+            valider = st.form_submit_button("Valider ✅")
             
-            if st.session_state.cible:
-                # Chronomètre
-                t_restant = max(0, 15 - int(time.time() - st.session_state.get('debut_temps', time.time())))
-                st.progress(t_restant / 15)
-                st.write(f"⏳ Temps restant : **{t_restant}s**")
+            if valider:
+                if normaliser(reponse) == normaliser(st.session_state.cible):
+                    st.success(f"Excellent ! C'est bien : {st.session_state.cible}")
+                    st.session_state.score += 1
+                else:
+                    st.error(f"Dommage... La réponse était : {st.session_state.cible}")
+                
+                st.session_state.nb_q += 1
+                st.session_state.cible = None # Pour changer de zone à la prochaine étape
+                time.sleep(1.5)
+                st.rerun()
+    else:
+        st.session_state.termine = True
+        st.rerun()
 
-                # Carte de Question Interactive (Zoomable)
-                df['color_quiz'] = df[col_nom].apply(lambda x: 'Cible' if x == st.session_state.cible else 'Autre')
-                fig_q = px.choropleth_mapbox(
-                    df, geojson=df.geometry, locations=df.index,
-                    color='color_quiz', mapbox_style="carto-positron",
-                    color_discrete_map={'Cible': 'red', 'Autre': 'whitesmoke'},
-                    zoom=6.5, center={"lat": 8.6, "lon": 1.2}, opacity=0.8
-                )
-                fig_q.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, showlegend=False)
-                st.plotly_chart(fig_q, use_container_width=True)
-
-                reponse = st.text_input("Votre réponse :", key=f"ans_{st.session_state.nb_questions}")
-                if st.button("Valider ✅"):
-                    if t_restant > 0 and normaliser(reponse) == normaliser(st.session_state.cible):
-                        st.success("Bravo !")
-                        st.session_state.score += 1
-                    else:
-                        st.error(f"Raté ! C'était {st.session_state.cible}")
-                    st.session_state.nb_questions += 1
-                    st.rerun()
-        else:
-            st.session_state.termine = True
-
-    if st.session_state.termine:
-        st.balloons()
-        st.header(f"🏆 Score Final : {st.session_state.score}/5")
-        nom = st.text_input("Nom pour le certificat :")
-        if nom and st.button("🎓 Générer mon Certificat PDF"):
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_draw_color(0, 102, 51)
-            pdf.rect(10, 10, 190, 277)
-            pdf.ln(40)
-            pdf.set_font("Arial", 'B', 30)
-            pdf.cell(190, 20, "CERTIFICAT DE RÉUSSITE", ln=True, align='C')
-            pdf.ln(20)
-            pdf.set_font("Arial", '', 18)
-            pdf.cell(190, 10, f"Décerné à {nom.upper()}", ln=True, align='C')
-            pdf.cell(190, 10, f"Score : {st.session_state.score}/5", ln=True, align='C')
-            pdf.ln(50)
-            pdf.set_font("Arial", 'I', 12)
-            pdf.cell(190, 10, f"JCDC TOGO - Direction Sylvestre BOCCO - {time.strftime('%d/%m/%Y')}", align='C')
-            pdf.output("certif.pdf")
-            with open("certif.pdf", "rb") as f:
-                st.download_button("⬇️ Télécharger le PDF", f, "Certificat_Togo.pdf")
+# --- ÉCRAN FINAL ---
+else:
+    st.balloons()
+    st.header(f"🏁 Quiz Terminé !")
+    st.subheader(f"Votre score final : {st.session_state.score} / 5")
+    
+    nom_certif = st.text_input("Entrez votre nom pour le certificat :")
+    if nom_certif and st.button("🎓 Générer mon Certificat"):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_draw_color(0, 102, 51)
+        pdf.rect(10, 10, 190, 277)
+        pdf.ln(50)
+        pdf.set_font("Arial", 'B', 25)
+        pdf.cell(190, 10, "CERTIFICAT DE RÉUSSITE", ln=True, align='C')
+        pdf.ln(20)
+        pdf.set_font("Arial", '', 15)
+        pdf.cell(190, 10, f"Décerné à : {nom_certif.upper()}", ln=True, align='C')
+        pdf.ln(40)
+        pdf.cell(190, 10, f"Pour sa maîtrise de la carte des {niveau} du Togo.", ln=True, align='C')
+        pdf.ln(60)
+        pdf.set_font("Arial", 'I', 10)
+        pdf.cell(190, 10, f"JCDC TOGO - Direction Sylvestre BOCCO - {time.strftime('%d/%m/%Y')}", align='C')
+        pdf.output("certif.pdf")
+        
+        with open("certif.pdf", "rb") as f:
+            st.download_button("⬇️ Télécharger le Certificat (PDF)", f, "Certificat_Togo_JCDC.pdf")
